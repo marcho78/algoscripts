@@ -1,0 +1,360 @@
+//@version=6
+//Developed by Algoscripts.dev 
+// Find me on X: https://x.com/devsec_ai
+strategy("Universal ORB Strategy v2 (Modes + Risk + Alerts + VolWidth Filters + Entry Guard + Compact HUD + Market Type)",
+     overlay=true, max_labels_count=500, max_lines_count=500,
+     initial_capital=100000, commission_type=strategy.commission.percent, commission_value=0.0,
+     calc_on_order_fills=true, calc_on_every_tick=false, pyramiding=0, process_orders_on_close=true)
+
+//=========================//
+//========= INPUTS =========//
+//=========================//
+
+// Market / Session
+market_type = input.string("Crypto 24/7", "Market Type", options=["Crypto 24/7","Regular Market (RTH)"])
+rth_session = input.session("0930-1600", "RTH Session (exchange time)")
+
+// OR Mode (const options + const default)
+or_mode = input.string("First N Minutes (session day)", "OR Mode",
+     options = ["First N Minutes (session day)", "First 1 Bar on range_tf"])
+
+// Mode params
+n_minutes   = input.int(30, "N Minutes (for First N Minutes mode)", minval=1, step=1)
+range_tf    = input.timeframe("15", "range_tf (for First 1 Bar mode)")
+breakout_tf = input.timeframe("5",  "breakout_tf (confirmation)")
+
+// Risk
+use_strategy_orders = input.bool(true, "Place Backtest Orders (otherwise signals only)")
+risk_per_trade_pct  = input.float(1.0, "Risk % of Equity", minval=0.1, step=0.1)
+buffer_ticks        = input.int(0, "Extra Stop Buffer (ticks)", minval=0)
+tp1_R               = input.float(1.0, "Target 1 (R)", minval=0.25, step=0.25)
+tp2_R               = input.float(2.0, "Target 2 (R)", minval=0.25, step=0.25)
+use_two_targets     = input.bool(true, "Scale Out: TP1 & TP2 (50/50)")
+trail_to_breakeven_after_tp1 = input.bool(true, "After TP1 Hit, Move Stop to Breakeven for Remainder")
+
+// Entries
+enable_breakout_entries = input.bool(true,  "Enable Breakout Entries (gap/impulse)")
+enable_retest_entries   = input.bool(true,  "Enable Retest Entries (pullback & re-break)")
+enable_reversal_entries = input.bool(true,  "Enable Reversal Entries")
+
+// Entry guard (X bars after break)
+max_bars_after_break = input.int(3, "Max Bars After Break to Allow Entry", minval=1, tooltip="If more than this many bars pass after the confirmed break, block new entries.")
+
+// Filters
+enable_min_or_filter = input.bool(true, "Enable Minimum OR Width Filter")
+min_or_ticks         = input.int(0, "Min OR Width (ticks)", minval=0)
+min_or_pct           = input.float(0.00, "Min OR Width (% of price)", minval=0.0, step=0.05)
+
+enable_volume_filter = input.bool(false, "Enable Volume Filter")
+vol_lookback         = input.int(20, "Volume SMA Length", minval=1)
+vol_multiplier       = input.float(1.20, "Volume Multiplier vs SMA", minval=0.5, step=0.05)
+
+// Visuals
+show_hud       = input.bool(true, "Show HUD (top-right)")
+show_or_lines  = input.bool(true, "Show OR Lines")
+show_raw_marks = input.bool(false, "Show Raw Signal Marks (faint)")
+label_size     = input.string("normal", "Label Size", options=["tiny","small","normal","large"])
+label_show_px        = input.bool(true, "Show Price In Label")
+label_y_offset_ticks = input.int(2, "Label Vertical Offset (ticks)", minval=0)
+
+//=========================//
+//==== HELPER FUNCTIONS ====//
+//=========================//
+
+f_ticks_to_price(_ticks) =>
+    syminfo.mintick * _ticks
+
+f_round_to_mintick(x) =>
+    math.round(x / syminfo.mintick) * syminfo.mintick
+
+f_sz(s) =>
+    s == "tiny" ? size.tiny : s == "small" ? size.small : s == "large" ? size.large : size.normal
+
+//=========================//
+//== TRADING-DAY DETECTION ==//
+//=========================//
+
+use_crypto   = market_type == "Crypto 24/7"
+is_rth_bar   = not na(time(timeframe.period, rth_session))   // true only during chosen RTH session on chart TF
+new_td       = use_crypto ? (ta.change(time("D")) != 0) : (is_rth_bar and not is_rth_bar[1])  // first bar of calendar day (crypto) or first bar of RTH session
+in_trading   = use_crypto ? true : is_rth_bar                 // used to restrict OR accumulation to RTH
+
+//=========================//
+//======== OR LOGIC =======//
+//=========================//
+
+var float or_high = na
+var float or_low  = na
+
+// Mode A: First N Minutes (accumulate from start of TRADING day)
+var float or_a_high = na
+var float or_a_low  = na
+var bool  or_a_finalized = false
+var int   start_ts = na
+var int   end_ts   = na
+
+if or_mode == "First N Minutes (session day)"
+    if new_td
+        start_ts := time
+        end_ts   := start_ts + n_minutes * 60 * 1000
+        or_a_high := na
+        or_a_low  := na
+        or_a_finalized := false
+    if not or_a_finalized and not na(end_ts)
+        if time <= end_ts and in_trading
+            or_a_high := na(or_a_high) ? high : math.max(or_a_high, high)
+            or_a_low  := na(or_a_low)  ? low  : math.min(or_a_low,  low)
+        else if time > end_ts
+            or_a_finalized := true
+    or_high := or_a_finalized ? or_a_high : na
+    or_low  := or_a_finalized ? or_a_low  : na
+
+// Mode B: First 1 Bar on range_tf — detect the FIRST bar of the TRADING day on range_tf
+if or_mode == "First 1 Bar on range_tf"
+    // Different day triggers for Crypto vs RTH inside the security call
+    _or_high = use_crypto
+         ? request.security(syminfo.tickerid, range_tf, ta.valuewhen(ta.change(time("D")) != 0, high, 0), barmerge.gaps_off, barmerge.lookahead_off)
+         : request.security(syminfo.tickerid, range_tf, ta.valuewhen( (not na(time(timeframe.period, rth_session)) and na(time(timeframe.period, rth_session))[1]), high, 0), barmerge.gaps_off, barmerge.lookahead_off)
+    _or_low  = use_crypto
+         ? request.security(syminfo.tickerid, range_tf, ta.valuewhen(ta.change(time("D")) != 0, low, 0),  barmerge.gaps_off, barmerge.lookahead_off)
+         : request.security(syminfo.tickerid, range_tf, ta.valuewhen( (not na(time(timeframe.period, rth_session)) and na(time(timeframe.period, rth_session))[1]), low, 0),  barmerge.gaps_off, barmerge.lookahead_off)
+    or_high := _or_high
+    or_low  := _or_low
+
+plot(show_or_lines ? or_high : na, "OR High", color=color.red, linewidth=2, style=plot.style_linebr)
+plot(show_or_lines ? or_low  : na, "OR Low",  color=color.green, linewidth=2, style=plot.style_linebr)
+
+//=========================//
+//==== FILTERS (WIDTH/VOL) ==//
+//=========================//
+
+or_width = na(or_high) or na(or_low) ? na : or_high - or_low
+min_width_price = math.max(f_ticks_to_price(min_or_ticks), close * (min_or_pct / 100.0))
+min_or_ok = not enable_min_or_filter or (not na(or_width) and (min_or_ticks == 0 and min_or_pct == 0 ? true : or_width >= min_width_price))
+
+vol_sma = ta.sma(volume, vol_lookback)
+vol_ok  = not enable_volume_filter or (volume >= vol_sma * vol_multiplier)
+
+//=========================//
+//==== BREAKOUT CONFIRM ====//
+//=========================//
+
+// Sample the lower-TF *closed* close, then compare on the chart TF
+bo_close1 = request.security(syminfo.tickerid, breakout_tf, close[1], barmerge.gaps_off, barmerge.lookahead_off)
+
+// Compare to TODAY's OR levels (no [1]); guard against na
+break_up_conf = not na(or_high) and bo_close1 > or_high
+break_dn_conf = not na(or_low)  and bo_close1 < or_low
+
+// Track the bar when the break was confirmed (for entry guard)
+var int up_break_bar = na
+var int dn_break_bar = na
+if new_td
+    up_break_bar := na
+    dn_break_bar := na
+if break_up_conf
+    up_break_bar := bar_index
+if break_dn_conf
+    dn_break_bar := bar_index
+
+//=========================//
+//======= CROSS LOGIC =====//
+//=========================//
+
+retest_crossunder_high = ta.crossunder(close, or_high)
+retest_crossover_low   = ta.crossover(close, or_low)
+entry_crossover_high   = ta.crossover(close, or_high)
+entry_crossunder_low   = ta.crossunder(close, or_low)
+
+//=========================//
+//======= STATE MACH ======//
+//=========================//
+
+var bool has_broken_up     = false
+var bool has_broken_dn     = false
+var bool waiting_retest_up = false
+var bool waiting_retest_dn = false
+
+if new_td
+    has_broken_up     := false
+    has_broken_dn     := false
+    waiting_retest_up := false
+    waiting_retest_dn := false
+
+if not has_broken_up and break_up_conf
+    has_broken_up := true
+if not has_broken_dn and break_dn_conf
+    has_broken_dn := true
+
+if has_broken_up and retest_crossunder_high
+    waiting_retest_up := true
+if has_broken_dn and retest_crossover_low
+    waiting_retest_dn := true
+
+//=========================//
+//====== ENTRY SIGNALS =====//
+//=========================//
+
+breakout_buy  = enable_breakout_entries and has_broken_up and not has_broken_dn and low > high[1]
+breakout_sell = enable_breakout_entries and has_broken_dn and not has_broken_up and high < low[1]
+retest_buy    = enable_retest_entries and waiting_retest_up and entry_crossover_high
+retest_sell   = enable_retest_entries and waiting_retest_dn and entry_crossunder_low
+reversal_sell = enable_reversal_entries and has_broken_up and not has_broken_dn and break_dn_conf
+reversal_buy  = enable_reversal_entries and has_broken_dn and not has_broken_up and break_up_conf
+
+if reversal_sell
+    has_broken_dn := true
+    has_broken_up := false
+if reversal_buy
+    has_broken_up := true
+    has_broken_dn := false
+
+if (retest_buy or breakout_buy)
+    waiting_retest_up := false
+if (retest_sell or breakout_sell)
+    waiting_retest_dn := false
+
+// Filters
+raw_long_signal  = (breakout_buy or retest_buy or reversal_buy)
+raw_short_signal = (breakout_sell or retest_sell or reversal_sell)
+
+filtered_long_signal  = raw_long_signal  and min_or_ok and vol_ok
+filtered_short_signal = raw_short_signal and min_or_ok and vol_ok
+
+//=========================//
+//==== ENTRY GUARD (X bars) ==//
+//=========================//
+
+within_long_window  = not na(up_break_bar) and (bar_index - up_break_bar) <= max_bars_after_break
+within_short_window = not na(dn_break_bar) and (bar_index - dn_break_bar) <= max_bars_after_break
+
+exec_long  = filtered_long_signal  and within_long_window
+exec_short = filtered_short_signal and within_short_window
+
+//=========================//
+//===== RISK & TARGETS =====//
+//=========================//
+
+entry_price_long  = close
+entry_price_short = close
+
+stop_long  = f_round_to_mintick(nz(or_high) - f_ticks_to_price(buffer_ticks))
+stop_short = f_round_to_mintick(nz(or_low)  + f_ticks_to_price(buffer_ticks))
+
+risk_long  = math.max(entry_price_long  - stop_long,  syminfo.mintick)
+risk_short = math.max(stop_short - entry_price_short, syminfo.mintick)
+
+tp1_long   = f_round_to_mintick(entry_price_long  + tp1_R * risk_long)
+tp2_long   = f_round_to_mintick(entry_price_long  + tp2_R * risk_long)
+tp1_short  = f_round_to_mintick(entry_price_short - tp1_R * risk_short)
+tp2_short  = f_round_to_mintick(entry_price_short - tp2_R * risk_short)
+
+//=========================//
+//==== STRATEGY ORDERS =====//
+//=========================//
+
+acct_equity = strategy.equity
+risk_cash   = acct_equity * (risk_per_trade_pct / 100.0)
+qty_long    = math.floor(risk_cash / risk_long)
+qty_short   = math.floor(risk_cash / risk_short)
+qty_long    := math.max(qty_long, 1)
+qty_short   := math.max(qty_short, 1)
+
+if use_strategy_orders
+    if exec_long and strategy.position_size <= 0
+        strategy.entry("L", strategy.long, qty=qty_long)
+    if exec_short and strategy.position_size >= 0
+        strategy.entry("S", strategy.short, qty=qty_short)
+
+if use_strategy_orders
+    if strategy.position_size > 0
+        if use_two_targets
+            half_qty = math.max(math.floor(strategy.position_size * 0.5), 1)
+            strategy.exit("L-TP1", from_entry="L", qty=half_qty, stop=stop_long, limit=tp1_long)
+            tp1_hit_long = high >= tp1_long
+            be_stop = trail_to_breakeven_after_tp1 and tp1_hit_long ? strategy.position_avg_price : stop_long
+            rem_qty = math.max(strategy.position_size - half_qty, 0)
+            if rem_qty > 0
+                strategy.exit("L-TP2", from_entry="L", qty=rem_qty, stop=be_stop, limit=tp2_long)
+        else
+            tp1_hit_long = high >= tp1_long
+            be_stop = trail_to_breakeven_after_tp1 and tp1_hit_long ? strategy.position_avg_price : stop_long
+            strategy.exit("L-ALL", from_entry="L", stop=be_stop, limit=tp2_long)
+
+    if strategy.position_size < 0
+        if use_two_targets
+            half_qtyS = math.max(math.floor(math.abs(strategy.position_size) * 0.5), 1)
+            strategy.exit("S-TP1", from_entry="S", qty=half_qtyS, stop=stop_short, limit=tp1_short)
+            tp1_hit_short = low <= tp1_short
+            be_stopS = trail_to_breakeven_after_tp1 and tp1_hit_short ? strategy.position_avg_price : stop_short
+            rem_qtyS = math.max(math.abs(strategy.position_size) - half_qtyS, 0)
+            if rem_qtyS > 0
+                strategy.exit("S-TP2", from_entry="S", qty=rem_qtyS, stop=be_stopS, limit=tp2_short)
+        else
+            tp1_hit_short = low <= tp1_short
+            be_stopS = trail_to_breakeven_after_tp1 and tp1_hit_short ? strategy.position_avg_price : stop_short
+            strategy.exit("S-ALL", from_entry="S", stop=be_stopS, limit=tp2_short)
+
+//=========================//
+//======== ALERTS =========//
+//=========================//
+
+alertcondition(exec_long,  "LONG Entry (Filtered + Guard)",  "LONG on {{ticker}} @ {{close}}")
+alertcondition(exec_short, "SHORT Entry (Filtered + Guard)", "SHORT on {{ticker}} @ {{close}}")
+
+//=========================//
+//======== LABELS =========//
+//=========================//
+
+if exec_long
+    label.new(bar_index, low - f_ticks_to_price(label_y_offset_ticks),
+      text="LONG" + (label_show_px ? " @ " + str.tostring(close, format.mintick) : ""),
+      style=label.style_label_up, textcolor=color.white, color=color.new(color.green, 0), size=f_sz(label_size))
+
+if exec_short
+    label.new(bar_index, high + f_ticks_to_price(label_y_offset_ticks),
+      text="SHORT" + (label_show_px ? " @ " + str.tostring(close, format.mintick) : ""),
+      style=label.style_label_down, textcolor=color.white, color=color.new(color.red, 0), size=f_sz(label_size))
+
+// Optional faint raw markers (for debugging)
+plotshape(show_raw_marks and filtered_long_signal,  title="Raw LONG",  text="L", style=shape.triangleup,   location=location.belowbar, color=color.new(color.green, 70), size=size.tiny)
+plotshape(show_raw_marks and filtered_short_signal, title="Raw SHORT", text="S", style=shape.triangledown, location=location.abovebar, color=color.new(color.red, 70),   size=size.tiny)
+
+//=========================//
+//========= HUD (COMPACT) ==//
+//=========================//
+
+var table hud = na
+if show_hud
+    if na(hud)
+        hud := table.new(position=position.top_right, columns=6, rows=3, bgcolor=color.new(color.black, 85), border_width=1, border_color=color.new(color.white, 60))
+
+    if barstate.islast
+        table.cell(hud, 0, 0, "ORB v6",         text_color=color.white, text_formatting=text.format_bold)
+        table.cell(hud, 1, 0, market_type + " · " + or_mode,  text_color=color.new(color.white, 0))
+        table.cell(hud, 2, 0, "Guard≤" + str.tostring(max_bars_after_break), text_color=color.new(color.white, 0))
+        table.cell(hud, 3, 0, enable_min_or_filter ? "MinOR✓" : "MinOR–", text_color=enable_min_or_filter ? color.new(color.lime, 0) : color.new(color.white, 50))
+        table.cell(hud, 4, 0, enable_volume_filter ? "Vol✓" : "Vol–",     text_color=enable_volume_filter ? color.new(color.lime, 0) : color.new(color.white, 50))
+        table.cell(hud, 5, 0, use_strategy_orders ? (use_two_targets ? "TP1/TP2" : "1×TP") : "Signals", text_color=color.new(color.white, 0))
+
+        table.cell(hud, 0, 1, "ORH", text_color=color.new(color.white, 40))
+        table.cell(hud, 1, 1, "ORL", text_color=color.new(color.white, 40))
+        table.cell(hud, 2, 1, "W",   text_color=color.new(color.white, 40))
+        table.cell(hud, 3, 1, "Break", text_color=color.new(color.white, 40))
+        table.cell(hud, 4, 1, "Setup", text_color=color.new(color.white, 40))
+        table.cell(hud, 5, 1, "Pos",   text_color=color.new(color.white, 40))
+
+        table.cell(hud, 0, 2, na(or_high) ? "—" : str.tostring(or_high, format.mintick), text_color=color.new(color.red,  0))
+        table.cell(hud, 1, 2, na(or_low)  ? "—" : str.tostring(or_low,  format.mintick), text_color=color.new(color.lime, 0))
+        table.cell(hud, 2, 2, na(or_width)? "—" : str.tostring(or_width,format.mintick), text_color=color.new(color.white, 0))
+
+        break_status = has_broken_up ? "Up" : has_broken_dn ? "Down" : "None"
+        break_col    = has_broken_up ? color.new(color.lime,0) : has_broken_dn ? color.new(color.red,0) : color.new(color.white,50)
+        table.cell(hud, 3, 2, break_status, text_color=break_col)
+
+        curr_setup = waiting_retest_up ? "Wait Rtest L" : waiting_retest_dn ? "Wait Rtest S" : has_broken_up ? "Long Ops" : has_broken_dn ? "Short Ops" : "In Range"
+        table.cell(hud, 4, 2, curr_setup, text_color=color.new(color.white, 0))
+
+        price_pos = na(or_high) or na(or_low) ? "—" : close > or_high ? "Above" : close < or_low ? "Below" : "Inside"
+        price_col = na(or_high) or na(or_low) ? color.new(color.white, 50) : close > or_high ? color.new(color.lime,0) : close < or_low ? color.new(color.red,0) : color.new(color.yellow,0)
+        table.cell(hud, 5, 2, price_pos, text_color=price_col)

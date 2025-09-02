@@ -40,6 +40,15 @@ Advanced stock screening and analysis tool
 
 **[🚀 Launch App](https://algoscript-sc.streamlit.app/)**
 
+### 5. [TradingView ORB Strategy](./trading-view-orb/)
+Universal Opening Range Breakout (ORB) strategy for TradingView
+- Pine Script v6 strategy with real-time HUD
+- Risk-managed exits with R multiples
+- Configurable filters and entry guards
+- Works on equities, futures, and crypto
+
+**[📊 View Strategy Code](./trading-view-orb/)**
+
 ## 🔧 Local Setup
 
 Each tool can be run locally:
