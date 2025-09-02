@@ -39,7 +39,7 @@ Advanced stock screening and analysis tool
 - Export filtered results
 **[🚀 Launch App](https://algoscript-sc.streamlit.app/)**
 
-### 5. [TradingView ORB Strategy](https://github.com/marcho78/algoscripts/tree/master/trading-view-orb)
+### 5. [TradingView ORB Strategy](https://github.com/marcho78/algoscripts/blob/master/trading-view-orb/tview_orb_v2.pine)
 Universal Opening Range Breakout (ORB) strategy for TradingView
 - Pine Script v6 strategy with real-time HUD
 - Risk-managed exits with R multiples
@@ -48,9 +48,9 @@ Universal Opening Range Breakout (ORB) strategy for TradingView
 
 **[📊 View Live Indicator](https://www.tradingview.com/chart/eavzBPu7/)**
 
-**[💻 View Code](https://github.com/marcho78/algoscripts/tree/master/trading-view-orbtvorb.pine)**
+**[💻 View Code](https://github.com/marcho78/algoscripts/blob/master/trading-view-orb/tview_orb_v2.pinetvorb.pine)**
 
-**[📊 View Strategy README](https://github.com/marcho78/algoscripts/tree/master/trading-view-orb)**
+**[📊 View Strategy README](https://github.com/marcho78/algoscripts/blob/master/trading-view-orb/tview_orb_v2.pine)**
 
 Each tool can be run locally:
 
