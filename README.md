@@ -37,7 +37,6 @@ Advanced stock screening and analysis tool
 - Financial metrics comparison
 - Interactive charts and analysis
 - Export filtered results
-
 **[🚀 Launch App](https://algoscript-sc.streamlit.app/)**
 
 ### 5. [TradingView ORB Strategy](./trading-view-orb/)
@@ -47,7 +46,7 @@ Universal Opening Range Breakout (ORB) strategy for TradingView
 - Configurable filters and entry guards
 - Works on equities, futures, and crypto
 
-**[📊 View Strategy Code](./trading-view-orb/)**
+**[📊 View Live Indicator](https://www.tradingview.com/chart/eavzBPu7/)**
 
 ## 🔧 Local Setup
 
