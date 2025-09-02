@@ -48,7 +48,9 @@ Universal Opening Range Breakout (ORB) strategy for TradingView
 
 **[📊 View Live Indicator](https://www.tradingview.com/chart/eavzBPu7/)**
 
-## 🔧 Local Setup
+**[💻 View Code](./trading-view-orb/tvorb.pine)**
+
+**[📊 View Strategy README](./trading-view-orb/)**
 
 Each tool can be run locally:
 
