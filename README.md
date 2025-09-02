@@ -11,7 +11,7 @@ Real-time cryptocurrency portfolio tracking with P&L analysis
 - Historical price charts
 - Export functionality
 
-**[🚀 Launch App](https://crypto-portfolio-tracker.streamlit.app)**
+**[🚀 Launch App](https://algoscripts-cpt.streamlit.app/)**
 
 ### 2. [Options Strategy Analyzer](./options-strategy-analyzer/)
 Advanced options trading strategy analysis and visualization
@@ -20,7 +20,7 @@ Advanced options trading strategy analysis and visualization
 - Risk/reward analysis
 - Interactive strategy builder
 
-**[🚀 Launch App](https://options-strategy-analyzer.streamlit.app)**
+**[🚀 Launch App](https://algoscripts-osa.streamlit.app/)**
 
 ### 3. [Portfolio Risk Analyzer](./portfolio-risk-analyzer/)
 Comprehensive portfolio risk assessment and optimization
@@ -29,7 +29,7 @@ Comprehensive portfolio risk assessment and optimization
 - Correlation analysis
 - Risk metrics visualization
 
-**[🚀 Launch App](https://portfolio-risk-analyzer.streamlit.app)**
+**[🚀 Launch App](https://algoscripts-pra.streamlit.app/)**
 
 ### 4. [Stock Screener](./stock-screener/)
 Advanced stock screening and analysis tool
@@ -38,7 +38,7 @@ Advanced stock screening and analysis tool
 - Interactive charts and analysis
 - Export filtered results
 
-**[🚀 Launch App](https://stock-screener.streamlit.app)**
+**[🚀 Launch App](https://algoscript-sc.streamlit.app/)**
 
 ## 🔧 Local Setup
 
